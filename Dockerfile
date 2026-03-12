@@ -29,6 +29,9 @@ RUN npm ci --omit=dev && npm cache clean --force
 # 从构建阶段复制编译后的代码
 COPY --from=builder /app/dist ./dist
 
+# 复制环境配置文件
+COPY .env.production ./
+
 # 创建 uploads 目录
 RUN mkdir -p uploads
 
