@@ -4,7 +4,7 @@ export const CACHE_KEY_PREFIX = 'cache_key_prefix';
 export const CACHE_TTL_KEY = 'cache_ttl';
 
 /**
- * 标记接口启用 Redis 缓存
+ * 标记接口启用缓存
  * @param prefix 缓存 key 前缀
  * @param ttl 缓存时间（秒），默认 300s
  */

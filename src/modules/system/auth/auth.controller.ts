@@ -14,9 +14,12 @@ import { Public } from '@/common/decorators/public.decorator';
 import { CurrentUser } from '@/common/decorators/current-user.decorator';
 import { Cacheable } from '@/common/decorators/cache.decorator';
 import { RedisCacheInterceptor } from '@/common/interceptors/cache.interceptor';
+import { RateLimit } from '@/common/decorators/rate-limit.decorator';
+import { RateLimitGuard } from '@/common/guards/rate-limit.guard';
 
 @ApiTags('认证')
 @Controller('auth')
+@UseGuards(RateLimitGuard)
 export class AuthController {
   constructor(private readonly authService: AuthService) {}
 
@@ -26,6 +29,15 @@ export class AuthController {
   @Public()
   @Post('send-code')
   @ApiOperation({ summary: '发送邮箱验证码' })
+  @RateLimit({
+    ttl: 60,
+    limit: 1,
+    keyPrefix: 'email_send',
+    keyGenerator: (ctx) => {
+      const request = ctx.switchToHttp().getRequest();
+      return `email_send:${request.body.email}`;
+    },
+  })
   sendVerificationCode(@Body() dto: SendVerificationCodeDto) {
     return this.authService.sendVerificationCode(dto);
   }

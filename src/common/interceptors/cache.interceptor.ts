@@ -1,9 +1,10 @@
-import { Injectable, NestInterceptor, ExecutionContext, CallHandler } from '@nestjs/common';
+import { Injectable, NestInterceptor, ExecutionContext, CallHandler, Inject } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
 import { Observable, of } from 'rxjs';
 import { tap } from 'rxjs/operators';
 import { Request } from 'express';
-import { RedisService } from '@/modules/common/redis/redis.service';
+import { CACHE_MANAGER } from '@nestjs/cache-manager';
+import { Cache } from 'cache-manager';
 import { Response } from '@/common/utils/response';
 import { CACHE_KEY_PREFIX, CACHE_TTL_KEY } from '@/common/decorators/cache.decorator';
 
@@ -11,7 +12,7 @@ import { CACHE_KEY_PREFIX, CACHE_TTL_KEY } from '@/common/decorators/cache.decor
 export class RedisCacheInterceptor implements NestInterceptor {
   constructor(
     private readonly reflector: Reflector,
-    private readonly redisService: RedisService,
+    @Inject(CACHE_MANAGER) private cacheManager: Cache,
   ) {}
 
   async intercept(context: ExecutionContext, next: CallHandler): Promise<Observable<any>> {
@@ -22,7 +23,7 @@ export class RedisCacheInterceptor implements NestInterceptor {
     const request = context.switchToHttp().getRequest<Request>();
     const cacheKey = this.buildCacheKey(prefix, request);
 
-    const cached = await this.redisService.get(cacheKey);
+    const cached = await this.cacheManager.get<string>(cacheKey);
     if (cached) {
       const parsed = JSON.parse(cached);
       return of(new Response(parsed.message, parsed.data));
@@ -31,7 +32,7 @@ export class RedisCacheInterceptor implements NestInterceptor {
     return next.handle().pipe(
       tap(async (response) => {
         if (response instanceof Response) {
-          await this.redisService.set(cacheKey, JSON.stringify(response), ttl);
+          await this.cacheManager.set(cacheKey, JSON.stringify(response), ttl * 1000); // 转换为毫秒
         }
       }),
     );

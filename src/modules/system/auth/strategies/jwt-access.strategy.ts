@@ -1,12 +1,13 @@
-import { Injectable, UnauthorizedException } from '@nestjs/common';
+import { Injectable, UnauthorizedException, Inject } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { PassportStrategy } from '@nestjs/passport';
 import { ExtractJwt, Strategy } from 'passport-jwt';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Request } from 'express';
+import { CACHE_MANAGER } from '@nestjs/cache-manager';
+import { Cache } from 'cache-manager';
 import { User } from '@/modules/system/user/entities/user.entity';
-import { RedisService } from '@/modules/common/redis/redis.service';
 
 const BLACKLIST_PREFIX = 'auth:blacklist:';
 
@@ -15,7 +16,7 @@ export class JwtAccessStrategy extends PassportStrategy(Strategy, 'jwt-access') 
   constructor(
     configService: ConfigService,
     @InjectRepository(User) private readonly userRepo: Repository<User>,
-    private readonly redisService: RedisService,
+    @Inject(CACHE_MANAGER) private cacheManager: Cache,
   ) {
     super({
       jwtFromRequest: ExtractJwt.fromAuthHeaderAsBearerToken(),
@@ -28,7 +29,7 @@ export class JwtAccessStrategy extends PassportStrategy(Strategy, 'jwt-access') 
   async validate(req: Request, payload: { sub: string; email: string }) {
     const token = req.headers.authorization?.replace('Bearer ', '');
     if (token) {
-      const isBlacklisted = await this.redisService.exists(`${BLACKLIST_PREFIX}${token}`);
+      const isBlacklisted = await this.cacheManager.get(`${BLACKLIST_PREFIX}${token}`);
       if (isBlacklisted) {
         throw new UnauthorizedException('Token 已失效，请重新登录');
       }

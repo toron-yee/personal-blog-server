@@ -8,6 +8,7 @@ import { JwtAccessStrategy } from './strategies/jwt-access.strategy';
 import { JwtRefreshStrategy } from './strategies/jwt-refresh.strategy';
 import { User } from '@/modules/system/user/entities/user.entity';
 import { EmailModule } from '@/modules/common/email/email.module';
+import { RateLimitGuard } from '@/common/guards/rate-limit.guard';
 
 @Module({
   imports: [
@@ -17,7 +18,7 @@ import { EmailModule } from '@/modules/common/email/email.module';
     EmailModule,
   ],
   controllers: [AuthController],
-  providers: [AuthService, JwtAccessStrategy, JwtRefreshStrategy],
+  providers: [AuthService, JwtAccessStrategy, JwtRefreshStrategy, RateLimitGuard],
   exports: [AuthService],
 })
 export class AuthModule {}

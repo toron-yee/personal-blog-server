@@ -1,20 +1,23 @@
-import { Injectable, BadRequestException, ForbiddenException, NotFoundException } from '@nestjs/common';
+import { Injectable, BadRequestException, ForbiddenException, NotFoundException, Inject } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, Like } from 'typeorm';
+import { ConfigService } from '@nestjs/config';
+import { CACHE_MANAGER } from '@nestjs/cache-manager';
+import { Cache } from 'cache-manager';
 import { User } from './entities/user.entity';
 import { CreateUserDto } from './dto/create-user.dto';
 import { UpdateUserDto } from './dto/update-user.dto';
 import { UpdateProfileDto } from './dto/update-profile.dto';
 import { QueryUserDto } from './dto/query-user.dto';
 import { UserRole } from '@/common/enums/user.enum';
-import { RedisService } from '@/modules/common/redis/redis.service';
 import { Response } from '@/common/utils/response';
 
 @Injectable()
 export class UserService {
   constructor(
     @InjectRepository(User) private readonly userRepo: Repository<User>,
-    private readonly redisService: RedisService,
+    @Inject(CACHE_MANAGER) private cacheManager: Cache,
+    private readonly configService: ConfigService,
   ) {}
 
   async create(dto: CreateUserDto, operator: User) {
@@ -100,10 +103,35 @@ export class UserService {
   }
 
   private async clearUserCache(userId?: string) {
-    await this.redisService.delByPrefix('cache:user-list:');
-    if (userId) {
-      await this.redisService.delByPrefix(`cache:user-detail:${userId}`);
-      await this.redisService.delByPrefix(`cache:profile:${userId}`);
+    const cacheStore = this.configService.get('CACHE_STORE', 'memory');
+
+    if (cacheStore === 'redis') {
+      // Redis 支持按前缀删除
+      const store = (this.cacheManager as any).store;
+      if (store && store.keys) {
+        // 删除用户列表缓存
+        const listKeys = await store.keys('cache:user-list:*');
+        if (listKeys && listKeys.length > 0) {
+          await Promise.all(listKeys.map((key: string) => this.cacheManager.del(key)));
+        }
+
+        if (userId) {
+          // 删除用户详情和资料缓存
+          const userKeys = await store.keys(`cache:user-detail:${userId}*`);
+          const profileKeys = await store.keys(`cache:profile:${userId}*`);
+          const allKeys = [...(userKeys || []), ...(profileKeys || [])];
+          if (allKeys.length > 0) {
+            await Promise.all(allKeys.map((key: string) => this.cacheManager.del(key)));
+          }
+        }
+      }
+    } else {
+      // 内存缓存只能删除具体的 key
+      if (userId) {
+        await this.cacheManager.del(`cache:user-detail:${userId}`);
+        await this.cacheManager.del(`cache:profile:${userId}`);
+      }
+      // 注意：内存缓存无法批量删除 cache:user-list: 前缀的缓存
     }
   }
 

@@ -3,15 +3,17 @@ import {
   NotFoundException,
   BadRequestException,
   ForbiddenException,
+  Inject,
 } from '@nestjs/common';
 import { createHash } from 'crypto';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, In } from 'typeorm';
+import { CACHE_MANAGER } from '@nestjs/cache-manager';
+import { Cache } from 'cache-manager';
 import { Topic } from './entities/topic.entity';
 import { Category } from '../category/entities/category.entity';
 import { Tag } from '../tag/entities/tag.entity';
 import { User } from '../user/entities/user.entity';
-import { RedisService } from '@/modules/common/redis/redis.service';
 import { CreateTopicDto } from './dto/create-topic.dto';
 import { UpdateTopicDto } from './dto/update-topic.dto';
 import { XssSanitizer } from '@/common/utils/xss-sanitizer';
@@ -36,7 +38,7 @@ export class TopicService {
     private tagRepository: Repository<Tag>,
     @InjectRepository(User)
     private userRepository: Repository<User>,
-    private readonly redisService: RedisService,
+    @Inject(CACHE_MANAGER) private cacheManager: Cache,
   ) {}
 
   /**
@@ -272,29 +274,32 @@ export class TopicService {
     }
 
     try {
-      const redis = this.redisService.getClient();
+      // 使用 cache-manager 实现简化的去重逻辑
       const minuteBucket = Math.floor(Date.now() / 60000);
       const rateKey = `topic:view:rate:${topicId}:${viewerId}:${minuteBucket}`;
-      const rate = await redis.incr(rateKey);
 
-      if (rate === 1) {
-        await redis.expire(rateKey, 60);
-      }
+      // 获取当前计数
+      const currentRate = await this.cacheManager.get<number>(rateKey);
+      const rate = (currentRate || 0) + 1;
+
+      // 设置计数，60 秒过期
+      await this.cacheManager.set(rateKey, rate, 60000);
 
       if (rate > TopicService.VIEW_RATE_LIMIT_PER_MINUTE) {
         return;
       }
 
+      // 检查去重 key
       const dedupeKey = `topic:view:dedupe:${topicId}:${viewerId}`;
-      const dedupeResult = await redis.set(
-        dedupeKey,
-        '1',
-        'EX',
-        TopicService.VIEW_DEDUP_TTL_SECONDS,
-        'NX',
-      );
+      const exists = await this.cacheManager.get(dedupeKey);
 
-      if (dedupeResult === 'OK') {
+      if (!exists) {
+        // 设置去重标记
+        await this.cacheManager.set(
+          dedupeKey,
+          '1',
+          TopicService.VIEW_DEDUP_TTL_SECONDS * 1000,
+        );
         await this.topicRepository.increment({ id: topicId }, 'viewCount', 1);
       }
     } catch {

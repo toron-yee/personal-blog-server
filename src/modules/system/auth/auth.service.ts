@@ -2,14 +2,16 @@ import {
   Injectable,
   BadRequestException,
   UnauthorizedException,
+  Inject,
 } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
+import { CACHE_MANAGER } from '@nestjs/cache-manager';
+import { Cache } from 'cache-manager';
 import * as bcrypt from 'bcryptjs';
 import { User } from '@/modules/system/user/entities/user.entity';
-import { RedisService } from '@/modules/common/redis/redis.service';
 import { EmailService } from '@/modules/common/email/email.service';
 import { RegisterDto } from './dto/register.dto';
 import { LoginDto } from './dto/login.dto';
@@ -30,14 +32,14 @@ export class AuthService {
     @InjectRepository(User) private readonly userRepo: Repository<User>,
     private readonly jwtService: JwtService,
     private readonly configService: ConfigService,
-    private readonly redisService: RedisService,
     private readonly emailService: EmailService,
+    @Inject(CACHE_MANAGER) private cacheManager: Cache,
   ) {}
 
   async register(dto: RegisterDto) {
     try {
-      // 验证邮箱验证码
-      const storedCode = await this.redisService.get(
+      // 验证邮箱验证码（使用内存缓存）
+      const storedCode = await this.cacheManager.get<string>(
         `${VERIFICATION_CODE_PREFIX}${dto.email}`,
       );
       if (!storedCode || storedCode !== dto.code) {
@@ -59,8 +61,7 @@ export class AuthService {
       await this.userRepo.save(user);
 
       // 删除验证码
-      await this.redisService.del(`${VERIFICATION_CODE_PREFIX}${dto.email}`);
-      await this.redisService.delByPrefix('cache:user-list:');
+      await this.cacheManager.del(`${VERIFICATION_CODE_PREFIX}${dto.email}`);
 
       const tokens = await this.generateAndStoreTokens(user);
       return new Response('注册成功', {
@@ -87,7 +88,7 @@ export class AuthService {
   }
 
   async refresh(userId: string, refreshToken: string) {
-    const stored = await this.redisService.get(
+    const stored = await this.cacheManager.get<string>(
       `${REFRESH_TOKEN_PREFIX}${userId}`,
     );
     if (!stored || stored !== refreshToken) {
@@ -102,16 +103,16 @@ export class AuthService {
   }
 
   async logout(userId: string, accessToken: string) {
-    await this.redisService.del(`${REFRESH_TOKEN_PREFIX}${userId}`);
+    await this.cacheManager.del(`${REFRESH_TOKEN_PREFIX}${userId}`);
 
     const decoded = this.jwtService.decode(accessToken) as { exp?: number };
     if (decoded?.exp) {
       const ttl = decoded.exp - Math.floor(Date.now() / 1000);
       if (ttl > 0) {
-        await this.redisService.set(
+        await this.cacheManager.set(
           `${BLACKLIST_PREFIX}${accessToken}`,
           '1',
-          ttl,
+          ttl * 1000, // 转换为毫秒
         );
       }
     }
@@ -120,7 +121,8 @@ export class AuthService {
   }
 
   async isAccessTokenBlacklisted(token: string): Promise<boolean> {
-    return this.redisService.exists(`${BLACKLIST_PREFIX}${token}`);
+    const result = await this.cacheManager.get(`${BLACKLIST_PREFIX}${token}`);
+    return !!result;
   }
 
   async updatePassword(
@@ -137,16 +139,16 @@ export class AuthService {
     user.password = bcrypt.hashSync(dto.newPassword, 10);
     await this.userRepo.save(user);
 
-    await this.redisService.del(`${REFRESH_TOKEN_PREFIX}${userId}`);
+    await this.cacheManager.del(`${REFRESH_TOKEN_PREFIX}${userId}`);
     if (accessToken) {
       const decoded = this.jwtService.decode(accessToken) as { exp?: number };
       if (decoded?.exp) {
         const ttl = decoded.exp - Math.floor(Date.now() / 1000);
         if (ttl > 0) {
-          await this.redisService.set(
+          await this.cacheManager.set(
             `${BLACKLIST_PREFIX}${accessToken}`,
             '1',
-            ttl,
+            ttl * 1000, // 转换为毫秒
           );
         }
       }
@@ -178,10 +180,10 @@ export class AuthService {
     const refreshTtl = this.parseTtlToSeconds(
       this.configService.get('JWT_REFRESH_EXPIRES_IN', '7d'),
     );
-    await this.redisService.set(
+    await this.cacheManager.set(
       `${REFRESH_TOKEN_PREFIX}${user.id}`,
       refreshToken,
-      refreshTtl,
+      refreshTtl * 1000, // 转换为毫秒
     );
 
     return { accessToken, refreshToken };
@@ -205,13 +207,13 @@ export class AuthService {
    * 发送邮箱验证码
    */
   async sendVerificationCode(dto: SendVerificationCodeDto) {
-    const code = Math.random().toString().slice(2, 8);
+    const code = this.generateSecureCode(6);
 
-    // 存储验证码到 Redis，有效期 10 分钟
-    await this.redisService.set(
+    // 存储验证码到内存缓存，有效期 10 分钟（600 秒）
+    await this.cacheManager.set(
       `${VERIFICATION_CODE_PREFIX}${dto.email}`,
       code,
-      600,
+      600000, // cache-manager 使用毫秒
     );
 
     // 发送邮件
@@ -225,10 +227,20 @@ export class AuthService {
   }
 
   /**
+   * 生成安全的随机验证码
+   * 使用 crypto.randomBytes 替代 Math.random()
+   */
+  private generateSecureCode(length: number): string {
+    const crypto = require('crypto');
+    const bytes = crypto.randomBytes(Math.ceil(length / 2));
+    return bytes.toString('hex').slice(0, length).toUpperCase();
+  }
+
+  /**
    * 验证邮箱
    */
   async verifyEmail(dto: VerifyEmailDto) {
-    const storedCode = await this.redisService.get(
+    const storedCode = await this.cacheManager.get<string>(
       `${VERIFICATION_CODE_PREFIX}${dto.email}`,
     );
     if (!storedCode || storedCode !== dto.code) {
@@ -236,14 +248,14 @@ export class AuthService {
     }
 
     // 删除验证码
-    await this.redisService.del(`${VERIFICATION_CODE_PREFIX}${dto.email}`);
+    await this.cacheManager.del(`${VERIFICATION_CODE_PREFIX}${dto.email}`);
 
     // 生成重置密码令牌，有效期 30 分钟
-    const resetToken = Math.random().toString(36).slice(2);
-    await this.redisService.set(
+    const resetToken = this.generateSecureCode(32);
+    await this.cacheManager.set(
       `${RESET_PASSWORD_PREFIX}${dto.email}`,
       resetToken,
-      1800,
+      1800000, // 30 分钟（毫秒）
     );
 
     return new Response('邮箱验证成功', { resetToken });
@@ -253,7 +265,7 @@ export class AuthService {
    * 重置密码
    */
   async resetPassword(dto: ResetPasswordDto) {
-    const storedCode = await this.redisService.get(
+    const storedCode = await this.cacheManager.get<string>(
       `${VERIFICATION_CODE_PREFIX}${dto.email}`,
     );
     if (!storedCode || storedCode !== dto.code) {
@@ -267,11 +279,11 @@ export class AuthService {
     await this.userRepo.save(user);
 
     // 删除验证码和重置令牌
-    await this.redisService.del(`${VERIFICATION_CODE_PREFIX}${dto.email}`);
-    await this.redisService.del(`${RESET_PASSWORD_PREFIX}${dto.email}`);
+    await this.cacheManager.del(`${VERIFICATION_CODE_PREFIX}${dto.email}`);
+    await this.cacheManager.del(`${RESET_PASSWORD_PREFIX}${dto.email}`);
 
     // 清除该用户的所有 Token
-    await this.redisService.del(`${REFRESH_TOKEN_PREFIX}${user.id}`);
+    await this.cacheManager.del(`${REFRESH_TOKEN_PREFIX}${user.id}`);
 
     return new Response('密码重置成功，请使用新密码登录');
   }
