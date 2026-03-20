@@ -4,11 +4,13 @@ import { ConfigModule, ConfigService } from '@nestjs/config';
 import { TypeOrmModule, TypeOrmModuleOptions } from '@nestjs/typeorm';
 import { CacheModule } from '@nestjs/cache-manager';
 import { redisStore } from 'cache-manager-redis-yet';
-import { SystemModule } from './modules/system/system.module';
-import { CommonModule } from './modules/common/common.module';
+import { HttpExceptionFilter } from './common/filters/http-exception.filter';
 import { JwtAuthGuard } from './common/guards/jwt-auth.guard';
 import { RolesGuard } from './common/guards/roles.guard';
-import { StorageModule } from './modules/storage/storage.module';
+import { IdentityModule } from './modules/identity/identity.module';
+import { ContentModule } from './modules/content/content.module';
+import { InteractionModule } from './modules/interaction/interaction.module';
+import { InfraModule } from './modules/infra/infra.module';
 
 const env = process.env.NODE_ENV || 'development';
 
@@ -65,11 +67,13 @@ const env = process.env.NODE_ENV || 'development';
         timezone: '+08:00',
       } as TypeOrmModuleOptions),
     }),
-    CommonModule,
-    SystemModule,
-    StorageModule,
+    InfraModule,
+    IdentityModule,
+    ContentModule,
+    InteractionModule,
   ],
   providers: [
+    HttpExceptionFilter,
     { provide: APP_GUARD, useClass: JwtAuthGuard },
     { provide: APP_GUARD, useClass: RolesGuard },
   ],
