@@ -193,18 +193,34 @@ export class UserService {
    * 获取用户统计信息
    */
   private async getUserStats(userId: string) {
-    const user = await this.userRepo.findOne({
-      where: { id: userId },
-      relations: ['topics', 'comments', 'topicLikes', 'commentLikes'],
-    });
-
-    if (!user) return null;
+    const [topicCount, commentCount, topicLikeCount, commentLikeCount] = await Promise.all([
+      this.userRepo.createQueryBuilder()
+        .select('COUNT(*)', 'cnt')
+        .from('topic', 't')
+        .where('t.creatorId = :userId AND t.isDeleted = false', { userId })
+        .getRawOne<{ cnt: string }>(),
+      this.userRepo.createQueryBuilder()
+        .select('COUNT(*)', 'cnt')
+        .from('comment', 'c')
+        .where('c.creatorId = :userId AND c.isDeleted = false', { userId })
+        .getRawOne<{ cnt: string }>(),
+      this.userRepo.createQueryBuilder()
+        .select('COUNT(*)', 'cnt')
+        .from('topic_like', 'tl')
+        .where('tl.userId = :userId', { userId })
+        .getRawOne<{ cnt: string }>(),
+      this.userRepo.createQueryBuilder()
+        .select('COUNT(*)', 'cnt')
+        .from('comment_like', 'cl')
+        .where('cl.userId = :userId', { userId })
+        .getRawOne<{ cnt: string }>(),
+    ]);
 
     return {
-      topicCount: user.topics?.length || 0,
-      commentCount: user.comments?.length || 0,
-      topicLikeCount: user.topicLikes?.length || 0,
-      commentLikeCount: user.commentLikes?.length || 0,
+      topicCount: Number(topicCount?.cnt ?? 0),
+      commentCount: Number(commentCount?.cnt ?? 0),
+      topicLikeCount: Number(topicLikeCount?.cnt ?? 0),
+      commentLikeCount: Number(commentLikeCount?.cnt ?? 0),
     };
   }
 }
