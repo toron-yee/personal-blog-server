@@ -23,6 +23,8 @@ async function bootstrap() {
   const httpExceptionFilter = app.get(HttpExceptionFilter);
   const env = process.env.NODE_ENV || 'development';
 
+  app.set('trust proxy', 1);
+
   app.use(helmet({
     contentSecurityPolicy: env === 'production' ? undefined : false,
     crossOriginEmbedderPolicy: false,
